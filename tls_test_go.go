@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"os"
 	"time"
 )
 
@@ -55,12 +56,27 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
+func tlsVersionName(version uint16) string {
+	switch version {
+	case tls.VersionTLS10:
+		return "TLS 1.0"
+	case tls.VersionTLS11:
+		return "TLS 1.1"
+	case tls.VersionTLS12:
+		return "TLS 1.2"
+	case tls.VersionTLS13:
+		return "TLS 1.3"
+	default:
+		return fmt.Sprintf("Unknown (0x%x)", version)
+	}
+}
+
 // startServer runs a TLS server that accepts one connection
-func startServer(cert tls.Certificate, ready chan<- struct{}) error {
+func startServer(cert tls.Certificate, tlsVersion uint16, ready chan<- struct{}) error {
 	config := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		MaxVersion:   tls.VersionTLS12, // Force TLS 1.2 like the Python version
+		MinVersion:   tlsVersion,
+		MaxVersion:   tlsVersion,
 	}
 
 	listener, err := tls.Listen("tcp", "127.0.0.1:8443", config)
@@ -69,7 +85,7 @@ func startServer(cert tls.Certificate, ready chan<- struct{}) error {
 	}
 	defer listener.Close()
 
-	fmt.Println("Server: Listening on 8443...")
+	fmt.Printf("Server: Listening on 8443 (forcing %s)...\n", tlsVersionName(tlsVersion))
 	ready <- struct{}{} // Signal that server is ready
 
 	// Accept one connection
@@ -85,8 +101,8 @@ func startServer(cert tls.Certificate, ready chan<- struct{}) error {
 	}
 
 	state := tlsConn.ConnectionState()
-	fmt.Printf("Server: Established TLS %x connection from %s\n",
-		state.Version, conn.RemoteAddr())
+	fmt.Printf("Server: Established %s connection from %s\n",
+		tlsVersionName(state.Version), conn.RemoteAddr())
 	fmt.Printf("Server: Cipher suite: %s\n", tls.CipherSuiteName(state.CipherSuite))
 
 	_, err = conn.Write([]byte("Hello from the server!"))
@@ -107,7 +123,7 @@ func startClient() error {
 	defer conn.Close()
 
 	state := conn.ConnectionState()
-	fmt.Printf("Client: Handshake complete. TLS version: %x\n", state.Version)
+	fmt.Printf("Client: Handshake complete. %s\n", tlsVersionName(state.Version))
 	fmt.Printf("Client: Cipher suite: %s\n", tls.CipherSuiteName(state.CipherSuite))
 
 	buf := make([]byte, 1024)
@@ -121,6 +137,23 @@ func startClient() error {
 }
 
 func main() {
+	// Parse command line argument for TLS version
+	tlsVersion := tls.VersionTLS12 // Default to TLS 1.2
+	
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "1.2", "tls12", "12":
+			tlsVersion = tls.VersionTLS12
+		case "1.3", "tls13", "13":
+			tlsVersion = tls.VersionTLS13
+		default:
+			fmt.Printf("Usage: %s [1.2|1.3]\n", os.Args[0])
+			fmt.Println("  1.2, tls12, 12 - Use TLS 1.2 (default)")
+			fmt.Println("  1.3, tls13, 13 - Use TLS 1.3")
+			os.Exit(1)
+		}
+	}
+
 	// Generate self-signed certificate
 	fmt.Println("Generating self-signed certificate...")
 	cert, err := generateSelfSignedCert()
@@ -135,7 +168,7 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		serverErr <- startServer(cert, ready)
+		serverErr <- startServer(cert, uint16(tlsVersion), ready)
 	}()
 
 	// Wait for server to be ready
@@ -154,4 +187,3 @@ func main() {
 
 	fmt.Println("Done!")
 }
-
