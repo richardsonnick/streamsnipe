@@ -137,6 +137,8 @@ func startClient() error {
 }
 
 func main() {
+	fmt.Printf("PID: %d\n", os.Getpid())
+	
 	// Parse command line argument for TLS version
 	tlsVersion := tls.VersionTLS12 // Default to TLS 1.2
 	
