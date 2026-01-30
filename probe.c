@@ -2,7 +2,6 @@
 
 BPF_HASH(inflight_read, u32, u64);
 
-
 TRACEPOINT_PROBE(syscalls, sys_enter_read) {
   u32 tid = bpf_get_current_pid_tgid();
   u64 addr = (u64)args->buf;
@@ -29,10 +28,15 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
       unsigned char s_id_len = data[43]; // Session id is used to get offset to extensions
       if (s_id_len > 32) s_id_len = 32;
 
+      int cipher_offset = 44 + s_id_len;
+      unsigned short cipher_id;
+      if (cipher_offset + 2 <= 256) {
+        cipher_id = (data[cipher_offset] << 8) | data[cipher_offset + 1];
+      }
+
       // Skip Record(5) + Handshake(4) + Version(2) + Random(32) + S_ID_Len(1) + S_ID(L) + Cipher(2) + Compression(1)
       // (This works for tls13 but tls12?)
       int ext_offset = 47 + s_id_len;
-
 
       unsigned short ext_total_len = (data[ext_offset] << 8) | data[ext_offset + 1];
       int cur_ext = ext_offset + 2;
@@ -52,7 +56,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
 
         if (type == 0x002b) { // supported_versions codepoint is 43 (0x002b) https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
           if (ptr + 6 <= data_end) {
-            unsigned short negotiated_version = (ptr[4] << 8) | ptr[5];
+            negotiated_version = (ptr[4] << 8) | ptr[5];
             is_tls13 = true;
           }
           break;
@@ -66,6 +70,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
       } else {
         bpf_trace_printk("Negotiated TLS Version: TLS1.2 (0x%x)\\n", negotiated_version);
       }
+      bpf_trace_printk("Selected Cipher ID: 0x%x\\n", cipher_id);
     }
   }
 
