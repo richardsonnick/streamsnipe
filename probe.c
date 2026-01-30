@@ -43,6 +43,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
 
       unsigned char *ptr = data + ext_offset + 2;
       unsigned char *data_end = data + 256;
+      int cur = ext_offset + 2;
       #define MAX_EXTENSIONS 8
       // ebpf does not like dynamic unbounder loops :(  SAD!
       // For unroll to work max_ext needs to be constant. It "unrolls" at comp time.
@@ -51,8 +52,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
       for (int i = 0; i < MAX_EXTENSIONS; i++) { 
         if (ptr + 4 > data_end) break;
 
-        unsigned short type = (ptr[0] << 8) | ptr[1];
-        unsigned short len = (ptr[2] << 8) | ptr[3];
+        int idx = cur & 0xFF; // This proves to the verifier that cur is within the bounds of data 
+
+        unsigned short type = (data[idx] << 8) | data[idx + 1];
+        unsigned short len = (data[idx + 2] << 8) | data[idx + 3];
 
         if (type == 0x002b) { // supported_versions codepoint is 43 (0x002b) https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
           if (ptr + 6 <= data_end) {
@@ -63,7 +66,7 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
         }
 
         if (len > 128) break;
-        ptr += 4 + len;
+        cur += 4 + len;
       }
       if (is_tls13) {
         bpf_trace_printk("Negotiated TLS Version: TLS1.3 (0x%x)\\n", negotiated_version);
