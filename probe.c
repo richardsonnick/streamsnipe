@@ -1,83 +1,124 @@
 #include <uapi/linux/ptrace.h>
 
-BPF_HASH(inflight_read, u32, u64);
+BPF_HASH(inflight, u32, u64);
 
 TRACEPOINT_PROBE(syscalls, sys_enter_read) {
   u32 tid = bpf_get_current_pid_tgid();
   u64 addr = (u64)args->buf;
-  inflight_read.update(&tid, &addr);
+  inflight.update(&tid, &addr);
+  return 0;
+}
+
+TRACEPOINT_PROBE(syscalls, sys_enter_recvfrom) {
+  u32 tid = bpf_get_current_pid_tgid();
+  u64 addr = (u64)args->ubuf;
+  inflight.update(&tid, &addr);
   return 0;
 }
 
 TRACEPOINT_PROBE(syscalls, sys_exit_read) {
   u32 tid = bpf_get_current_pid_tgid();
-  u64 *buf_addr = inflight_read.lookup(&tid);
-
+  u64 *buf_addr = inflight.lookup(&tid);
   if (buf_addr == 0) return 0;
-
+  
   int ret = args->ret;
   if (ret < 5) goto cleanup;
-
+  
   unsigned char data[256];
-  if (bpf_probe_read_user(&data, sizeof(data), (void *)*buf_addr) == 0) {
-    if (data[0] == 0x16 && data[5] == 0x02) { // Is TLSHANDSHAKE + Is SERVERHELLO
-      //bpf_trace_printk("SERVER HELLO\\n");
-      unsigned short negotiated_version = (data[9] << 8) | data[10];
-      bool is_tls13 = false;
-
-      unsigned char s_id_len = data[43]; // Session id is used to get offset to extensions
-      if (s_id_len > 32) s_id_len = 32;
-
-      int cipher_offset = 44 + s_id_len;
-      unsigned short cipher_id;
-      if (cipher_offset + 2 <= 256) {
-        cipher_id = (data[cipher_offset] << 8) | data[cipher_offset + 1];
-      }
-
-      // Skip Record(5) + Handshake(4) + Version(2) + Random(32) + S_ID_Len(1) + S_ID(L) + Cipher(2) + Compression(1)
-      // (This works for tls13 but tls12?)
-      int ext_offset = 47 + s_id_len;
-
-      unsigned short ext_total_len = (data[ext_offset] << 8) | data[ext_offset + 1];
-      int cur_ext = ext_offset + 2;
-
-      unsigned char *ptr = data + ext_offset + 2;
-      unsigned char *data_end = data + 256;
-      int cur = ext_offset + 2;
-      #define MAX_EXTENSIONS 8
-      // ebpf does not like dynamic unbounder loops :(  SAD!
-      // For unroll to work max_ext needs to be constant. It "unrolls" at comp time.
-      // #pragma unroll unrolls this loop into MAX_EXTENSION iterations.
-      #pragma unroll 
-      for (int i = 0; i < MAX_EXTENSIONS; i++) { 
-        if (ptr + 4 > data_end) break;
-
-        int idx = cur & 0xFF; // This proves to the verifier that cur is within the bounds of data 
-
-        unsigned short type = (data[idx] << 8) | data[idx + 1];
-        unsigned short len = (data[idx + 2] << 8) | data[idx + 3];
-
-        if (type == 0x002b) { // supported_versions codepoint is 43 (0x002b) https://datatracker.ietf.org/doc/html/rfc8446#section-4.2
-          if (ptr + 6 <= data_end) {
-            negotiated_version = (ptr[4] << 8) | ptr[5];
-            is_tls13 = true;
-          }
-          break;
-        }
-
-        if (len > 128) break;
-        cur += 4 + len;
-      }
-      if (is_tls13) {
-        bpf_trace_printk("Negotiated TLS Version: TLS1.3 (0x%x)\\n", negotiated_version);
-      } else {
-        bpf_trace_printk("Negotiated TLS Version: TLS1.2 (0x%x)\\n", negotiated_version);
-      }
-      bpf_trace_printk("Selected Cipher ID: 0x%x\\n", cipher_id);
+  if (bpf_probe_read_user(&data, sizeof(data), (void *)*buf_addr) != 0) goto cleanup;
+  
+  // Check for TLS Handshake (0x16) and SHLO (0x02)
+  if (data[0] == 0x16 && data[5] == 0x02) {
+    bpf_trace_printk("SERVER HELLO (read)\\n");
+    
+    // Version from ServerHello message (bytes 9-10)
+    unsigned short ver = (data[9] << 8) | data[10];
+    
+    // sess ID length at byte 43
+    unsigned char s_id_len = data[43];
+    if (s_id_len > 32) s_id_len = 32;
+    
+    // cipher suite offset = 44 + sess_id_len
+    int cipher_off = (44 + s_id_len) & 0xFF;
+    unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
+    
+    // Check for TLS 1.3 by looking at supported_versions extension
+    // Extension starts at: 5(record) + 4(handshake) + 2(ver) + 32(random) + 1(sid_len) + sid + 2(cipher) + 1(comp) = 47 + sid_len
+    int ext_start = (49 + s_id_len) & 0xFF;
+    
+    // Simple check: look for 0x002b (supported_versions) in first few positions
+    bool is_tls13 = false;
+    
+    // Check at ext_start (type field)
+    unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
+    if (ext_type == 0x002b) {
+      int ver_off = (ext_start + 4) & 0xFF;
+      ver = (data[ver_off] << 8) | data[ver_off + 1];
+      is_tls13 = true;
     }
+    
+    if (is_tls13) {
+      bpf_trace_printk("TLS 1.3: 0x%x\\n", ver);
+    } else {
+      bpf_trace_printk("TLS 1.2: 0x%x\\n", ver);
+    }
+    bpf_trace_printk("Cipher: 0x%x\\n", cipher);
   }
 
 cleanup:
-  inflight_read.delete(&tid);
+  inflight.delete(&tid);
+  return 0;
+}
+
+TRACEPOINT_PROBE(syscalls, sys_exit_recvfrom) {
+  u32 tid = bpf_get_current_pid_tgid();
+  u64 *buf_addr = inflight.lookup(&tid);
+  if (buf_addr == 0) return 0;
+  
+  int ret = args->ret;
+  if (ret < 5) goto cleanup;
+  
+  unsigned char data[256];
+  if (bpf_probe_read_user(&data, sizeof(data), (void *)*buf_addr) != 0) goto cleanup;
+  
+  // Check for TLS Handshake (0x16) and SHLO (0x02)
+  if (data[0] == 0x16 && data[5] == 0x02) {
+    bpf_trace_printk("SERVER HELLO (recvfrom)\\n");
+    
+    // Version from ServerHello message (bytes 9-10)
+    unsigned short ver = (data[9] << 8) | data[10];
+    
+    // sess id length at byte 43
+    unsigned char s_id_len = data[43];
+    if (s_id_len > 32) s_id_len = 32;
+    
+    // cipher suite offset = 44 + sess_id_len  
+    int cipher_off = (44 + s_id_len) & 0xFF;
+    unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
+    
+    // Check for TLS 1.3 by looking at supported_versions extension
+    int ext_start = (49 + s_id_len) & 0xFF;
+    
+    // Simple check: look for 0x002b (supported_versions) in first few positions
+    bool is_tls13 = false;
+    
+    // Check at ext_start (type field)
+    unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
+    if (ext_type == 0x002b) {
+      int ver_off = (ext_start + 4) & 0xFF;
+      ver = (data[ver_off] << 8) | data[ver_off + 1];
+      is_tls13 = true;
+    }
+    
+    if (is_tls13) {
+      bpf_trace_printk("TLS 1.3: 0x%x\\n", ver);
+    } else {
+      bpf_trace_printk("TLS 1.2: 0x%x\\n", ver);
+    }
+    bpf_trace_printk("Cipher: 0x%x\\n", cipher);
+  }
+
+cleanup:
+  inflight.delete(&tid);
   return 0;
 }
