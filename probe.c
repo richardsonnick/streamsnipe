@@ -41,16 +41,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
     int cipher_off = (44 + s_id_len) & 0xFF;
     unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
     
-    int ext_start = (49 + s_id_len) & 0xFF;
-    bool is_tls13 = false;
-    unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
-    if (ext_type == 0x002b) {
-      int ver_off = (ext_start + 4) & 0xFF;
-      ver = (data[ver_off] << 8) | data[ver_off + 1];
-      is_tls13 = true;
-    }
-    
+    // TLS 1.3 detection: cipher suites 0x13xx are TLS 1.3 only
+    bool is_tls13 = ((cipher >> 8) == 0x13);
     if (is_tls13) {
+      ver = 0x0304;  // TLS 1.3
       bpf_trace_printk("PID %d: TLS 1.3 (0x%x)\\n", pid, ver);
     } else {
       bpf_trace_printk("PID %d: TLS 1.2 (0x%x)\\n", pid, ver);
@@ -72,16 +66,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_read) {
       int cipher_off = (39 + s_id_len) & 0xFF;
       unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
       
-      int ext_start = (44 + s_id_len) & 0xFF;
-      bool is_tls13 = false;
-      unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
-      if (ext_type == 0x002b) {
-        int ver_off = (ext_start + 4) & 0xFF;
-        ver = (data[ver_off] << 8) | data[ver_off + 1];
-        is_tls13 = true;
-      }
-      
+      // TLS 1.3 detection: cipher suites 0x13xx are TLS 1.3 only
+      bool is_tls13 = ((cipher >> 8) == 0x13);
       if (is_tls13) {
+        ver = 0x0304;  // TLS 1.3
         bpf_trace_printk("PID %d: TLS 1.3 (0x%x)\\n", pid, ver);
       } else {
         bpf_trace_printk("PID %d: TLS 1.2 (0x%x)\\n", pid, ver);
@@ -119,16 +107,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_recvfrom) {
     int cipher_off = (44 + s_id_len) & 0xFF;
     unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
     
-    int ext_start = (49 + s_id_len) & 0xFF;
-    bool is_tls13 = false;
-    unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
-    if (ext_type == 0x002b) {
-      int ver_off = (ext_start + 4) & 0xFF;
-      ver = (data[ver_off] << 8) | data[ver_off + 1];
-      is_tls13 = true;
-    }
-    
+    // TLS 1.3 detection: cipher suites 0x13xx are TLS 1.3 only
+    bool is_tls13 = ((cipher >> 8) == 0x13);
     if (is_tls13) {
+      ver = 0x0304;  // TLS 1.3
       bpf_trace_printk("PID %d: TLS 1.3 (0x%x)\\n", pid, ver);
     } else {
       bpf_trace_printk("PID %d: TLS 1.2 (0x%x)\\n", pid, ver);
@@ -147,16 +129,10 @@ TRACEPOINT_PROBE(syscalls, sys_exit_recvfrom) {
       int cipher_off = (39 + s_id_len) & 0xFF;
       unsigned short cipher = (data[cipher_off] << 8) | data[cipher_off + 1];
       
-      int ext_start = (44 + s_id_len) & 0xFF;
-      bool is_tls13 = false;
-      unsigned short ext_type = (data[ext_start] << 8) | data[ext_start + 1];
-      if (ext_type == 0x002b) {
-        int ver_off = (ext_start + 4) & 0xFF;
-        ver = (data[ver_off] << 8) | data[ver_off + 1];
-        is_tls13 = true;
-      }
-      
+      // TLS 1.3 detection: cipher suites 0x13xx are TLS 1.3 only
+      bool is_tls13 = ((cipher >> 8) == 0x13);
       if (is_tls13) {
+        ver = 0x0304;  // TLS 1.3
         bpf_trace_printk("PID %d: TLS 1.3 (0x%x)\\n", pid, ver);
       } else {
         bpf_trace_printk("PID %d: TLS 1.2 (0x%x)\\n", pid, ver);
